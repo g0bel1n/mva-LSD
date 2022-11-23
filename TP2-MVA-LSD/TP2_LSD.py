@@ -1,11 +1,9 @@
-#%%
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from typing import Tuple, Any, Optional, List
 from math import log, exp
-from multiprocessing import cpu_count, Pool
 
 
 sns.set()
@@ -114,10 +112,9 @@ def display_result(T, grid, x, alg: str):
     plt.plot(T, x, label="Original signal")
     plt.legend()
     plt.xscale("log")
-    plt.title(f"Reconstructed signal, {beta=:.2f}, {err=:.2f} ")
-    plt.show()
-
+    plt.title(f"Reconstructed signal, {beta=:.2e}, {err=:.2f} ")
     plt.savefig(f"{alg}_signal.png")
+    plt.show()
 
     betas = [el[2] for el in grid]
     plt.scatter(betas, end_errors, marker="x")
@@ -125,11 +122,9 @@ def display_result(T, grid, x, alg: str):
     plt.xlabel("beta")
     plt.ylabel("Relatve error")
     plt.yscale("log")
-    plt.show()
     plt.savefig(f"{alg}_beta.png")
 
-
-#%%
+    return x_hat
 
 
 def projection(v, x):
@@ -175,12 +170,6 @@ class SmoothProject(Optimizer):
             xs.append(x_k)
 
         return (xs[np.argmin(errors)], errors, beta)
-
-
-#%%
-
-
-# %%
 
 
 def lambert_o_exp(z):
@@ -240,17 +229,22 @@ class FB_Optmizer(Optimizer):
             else ent_prox(x, beta, gamma)
         )
 
-        x_k = np.ones_like(self.x) * (max(self.x) + min(self.x)) / 2.0
         errors = []
         i = 0
-        y_k = x_k - gamma * self.K.T @ (self.K @ x_k - self.y)
-        while i < n_iter and np.linalg.norm(y_k) > self.eps:
 
+        x_k = np.ones_like(self.x) * (max(self.x) + min(self.x)) / 2.0
+        y_k = x_k - gamma * self.K.T @ (self.K @ x_k - self.y)
+        x_k_1 = x_k + _lambda * (_prox(y_k) - x_k)
+
+        while (
+            i < n_iter and np.linalg.norm(x_k_1 - x_k) / np.linalg.norm(x_k) > self.eps
+        ):
+            x_k = x_k_1
             y_k = x_k - gamma * self.K.T @ (self.K @ x_k - self.y)
-            x_k += _lambda * (_prox(y_k) - x_k)
-            errors.append(np.linalg.norm(x_k - self.x) / np.linalg.norm(self.x))
+            x_k_1 += _lambda * (_prox(y_k) - x_k)
+            errors.append(np.linalg.norm(x_k_1 - self.x) / np.linalg.norm(self.x))
             i += 1
-            xs.append(x_k)
+            xs.append(x_k_1)
 
         return (xs[np.argmin(errors)], errors, beta)
 
@@ -271,8 +265,8 @@ class DR(Optimizer):
     ):
 
         if gamma is None or _lambda is None:
-            gamma = 0.9 * 2.0 / max(np.linalg.eigvalsh(self.K.T @ self.K))
-            _lambda = 1 / 2.0
+            gamma = 0.01
+            _lambda = 1
         xs = []
         _prox_ent = lambda x: ent_prox(x, beta, gamma)
         F1_prox = lambda x: np.linalg.inv(
@@ -282,68 +276,72 @@ class DR(Optimizer):
         x_k = np.ones_like(self.x) * (max(self.x) + min(self.x)) / 2.0
         errors = []
         i = 0
-        y_k = x_k - gamma * self.K.T @ (self.K @ x_k - self.y)
-        while i < n_iter and np.linalg.norm(y_k) > self.eps:
 
+        y_k = _prox_ent(x_k)
+        z_k = F1_prox(2 * y_k - x_k)
+        x_k_1 = x_k + _lambda * (z_k - y_k)
+
+        while (
+            i < n_iter and np.linalg.norm(x_k_1 - x_k) / np.linalg.norm(x_k) > self.eps
+        ):
+            x_k = x_k_1
             y_k = _prox_ent(x_k)
             z_k = F1_prox(2 * y_k - x_k)
-            x_k += _lambda * (z_k - y_k)
-            errors.append(np.linalg.norm(x_k - self.x) / np.linalg.norm(self.x))
+            x_k_1 += _lambda * (z_k - y_k)
+            errors.append(np.linalg.norm(x_k_1 - self.x) / np.linalg.norm(self.x))
             i += 1
-            xs.append(x_k)
+            xs.append(x_k_1)
 
         return (xs[np.argmin(errors)], errors, beta)
 
 
-#%%
-# betas = np.linspace(0, 1e-1, 10)
-
-# l1_opt = FB_Optmizer(K=K, y=y, x=x, eps=0.015)
-
-# grid = l1_opt.grid_search(betas)
-
-# display_result(T, grid, x)
-
-
-# #%%
-# betas = np.linspace(1e-3, 1e-2, 10)
-
-# l1_opt = FB_Optmizer(K=K, y=y, x=x, eps=0.015, penal='ent')
-
-# grid = l1_opt.grid_search(betas)
-
-# display_result(T, grid, x)
-# %%
-
 if __name__ == "__main__":
+
+    # Run can be long for DR and FB_ent as computing the lambdert function is computionally costly
 
     (T, x, t, y, K) = sample_data()
 
-    # plt.plot(T, x)
-    # plt.xscale("log")
-    # plt.show()
+    #%%
+    betas = np.linspace(1e-5, 1e-2, 10)
+    grid = DR(K=K, y=y, x=x, eps=0.012).grid_search(betas)
+    dr_x_hat = display_result(T, grid, x, alg="DR")
+    #%%
+    betas = np.linspace(1e-2, 0.6, 10)
+    grid = SmoothProject(K=K, y=y, x=x, eps=0.012).grid_search(betas)
+    dr_proj = display_result(T, grid, x, alg="Projected Gradient")
 
-    # plt.plot(t, y)
-    # plt.xlim(left=0)
-    # plt.show()
+    #%%
+    betas = np.linspace(1e-6, 1e-2, 10)
+    grid = FB_Optmizer(K=K, y=y, x=x, eps=0.015, penal="ent").grid_search(betas)
+    fb_ent_x = display_result(T, grid, x, alg="FB entropy")
+    #%%
+    betas = np.linspace(1e-3, 1e-1, 10)
+    grid = FB_Optmizer(K=K, y=y, x=x, eps=0.015, penal="l1").grid_search(betas)
+    fb_l1_x = display_result(T, grid, x, alg="FB l1")
 
-    # betas = np.linspace(1e-2, 0.6, 10)
+    #%%
+    betas = np.linspace(1e-1, 4, 100)
+    grid = SmoothOptimize(K=K, y=y, x=x).grid_search(betas)
+    smooth_x = display_result(T, grid, x, alg="Smooth")
 
-    # l2_proj_opt = SmoothProject(K=K, y=y, x=x, eps=0.005)
+    #%%
+    plt.plot(T, dr_x_hat, label="DR")
+    plt.plot(T, dr_proj, label="Projected Gradient")
+    plt.plot(T, fb_ent_x, label="FB entropy")
+    plt.plot(T, fb_l1_x, label="FB sparse")
+    plt.plot(T, smooth_x, label="Smoothness penalisation")
+    plt.plot(T, x, label="Original Signal")
+    plt.legend()
+    plt.xscale("log")
+    plt.savefig("final.png")
+    plt.show()
 
-    # with Pool(cpu_count() - 1) as pool:
-    #     grid = list(
-    #         tqdm(
-    #             pool.imap(SmoothProject(K=K, y=y, x=x, eps=0.005).optimize, betas),
-    #             total=len(betas),
-    #         )
-    #     )
-
-    l2_opt = FB_Optmizer(K=K, y=y, x=x, eps=0.012, penal="ent")
-
-    betas = np.linspace(1e-4, 1, 10)
-
-    grid = l2_opt.grid_search(betas)
-
-    display_result(T, grid, x)
-# %%
+    #%%
+    plt.plot(T, x)
+    plt.xscale("log")
+    plt.title("Original signal")
+    plt.savefig("Original signal.png")
+    plt.show()
+    plt.plot(t, y)
+    plt.title("Noisy transformed signal")
+    plt.savefig("signal_1.png")

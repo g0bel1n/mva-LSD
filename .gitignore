@@ -1,0 +1,14 @@
+*.pyc
+*.DS_Store
+*.csv
+*.mat
+*.npy
+*.npz
+*.pkl
+*.pyd
+*.pyo
+*.so
+*.swp
+*.swo
+*.swn
+
